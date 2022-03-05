@@ -145,11 +145,10 @@ static void RenderRaycastWorld(struct game_state *State) {
 }
 
 /**
- * RotateVec2() - Rotates vector by number of radians 
+ * RotateVec2() - Rotates vector counterclockwise 
  * @Vec: Vector to rotate
  * @Rot: Radian angle to rotate 
  *
- * TODO: Need to check which clock direction it rotates 
  *
  * Return: Returns rotated vector
  */
