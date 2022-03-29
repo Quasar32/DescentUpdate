@@ -1,6 +1,6 @@
-CFLAGS = -std=c2x -Wall -Wextra -Wpedantic -g
+CFLAGS = -Wall 
 
 output: 
-	gcc win32_descent.c -mwindows -o descent $(CFLAGS) 
-	gcc descent.c -shared -o descent.dll $(CFLAGS)
+	gcc src/win32_descent.c -mwindows -o build/descent $(CFLAGS) 
+	gcc src/descent.c -shared -o build/descent.dll $(CFLAGS) 
 

@@ -1,22 +1,12 @@
 #include <stdio.h>
 #include <windows.h>
 #include "descent.h"
+#include "win32_descent_platform.c"
 
-/**
- * MY_WS_FLAGS - Flags of main window when not fullscreen
- */
 #define MY_WS_FLAGS (WS_VISIBLE | WS_SYSMENU | WS_CAPTION) 
 
-/**
- * winmm_func - Function type of timeBeginPeriod and timeEndPeriod
- */
 typedef MMRESULT WINAPI winmm_func(UINT);
 
-/**
- * Values globals to WinMain
- * g_DIBInfo: Bitmap information for main pixel buffer
- * g_GameState: Holds platform independent game state
- */
 static const BITMAPINFO g_DIBInfo = {
     .bmiHeader = {
         .biSize = sizeof(g_DIBInfo.bmiHeader),
@@ -30,26 +20,13 @@ static const BITMAPINFO g_DIBInfo = {
 
 static struct game_state *g_GameState;
 
-/** 
- * LogError() - Logs error to error.log with timestamp 
- * @Format: printf style format string
- * @...: printf style format args 
- * 
- * Note: Do NOT pass dynamic string into format
- *       Instead pass as an argument where the format string is %s.
- *       Example:
- *           Bad: LogError(SomeError); 
- *           Good: LogError("%s", SomeError);
- *
- * Return: Returns zero on failure and nonzero on success
- */
 __attribute__((format(printf, 1, 2)))
 static BOOL LogError(const char *Format, ...) {
     /*OpenErrorHandle*/
     static HANDLE s_ErrorHandle = INVALID_HANDLE_VALUE;
     if(s_ErrorHandle == INVALID_HANDLE_VALUE) {
         s_ErrorHandle = CreateFile(
-            "error.log",
+            "win32_error.log",
             FILE_APPEND_DATA,
             FILE_SHARE_READ, 
             NULL, 
@@ -106,16 +83,6 @@ static BOOL LogError(const char *Format, ...) {
     );
 }
 
-/**
- * MessageError() - Displays an error message box and logs an error 
- *
- * @Error: Error to display
- *
- * Context: Only to be used before successful window creation as
- *          message box is not a parentless.
- *
- * Note: On failure to log error, displays error message box
- */
 static void MessageError(const char *Error) {
     MessageBox(NULL, Error, "Error", MB_ICONERROR); 
     if(!LogError(Error)) { 
@@ -123,22 +90,12 @@ static void MessageError(const char *Error) {
     }
 }
 
-/**
- * LoadProcs() - Loads a library and some functions from that library
- *
- * @LibName: Library name 
- * @ProcCount: Number of functions
- * @ProcNames: The names of functions 
- * @Procs: The functions found
- *
- * Return: If successful, module handle to library, elsewise NULL
- */
 [[nodiscard]]
 static HMODULE LoadProcs(
     const char *LibName, 
     size_t ProcCount, 
-    const char *ProcNames[static ProcCount],
-    FARPROC Procs[static ProcCount]
+    const char *ProcNames[],
+    FARPROC Procs[]
 ) {
     HMODULE Library = LoadLibrary(LibName);
     if(!Library) {
@@ -154,55 +111,26 @@ static HMODULE LoadProcs(
     return Library;
 } 
 
-/**
- * GetPerfFreq() - Get processor performance frequency
- *
- * The performance frequency is the value of counter cycles per second. 
- * For example: If the performance frequency is 1000 and the 
- * the diffrence between two counters is 10000, than 10 s have passed. 
- *
- * Return: The performance frequency, always returns same value
- */
 static int64_t GetPerfFreq(void) {
     LARGE_INTEGER PerfFreq;
     QueryPerformanceFrequency(&PerfFreq);
     return PerfFreq.QuadPart;
 }
 
-/**
- * GetPerfCounter() - Gets performance counter 
- *
- * Performance counters are meaningingless by themselves however the
- * difference between two counters obtained at two diffrent times 
- * gives the change in time. See GetPerfFreq() for details
- *
- * Return: Returns performance counter
- */ 
 static int64_t GetPerfCounter(void) {
     LARGE_INTEGER PerfCounter;
     QueryPerformanceCounter(&PerfCounter);
     return PerfCounter.QuadPart;
 }
 
-/**
- * GetDeltaCounter() - Gets the change in counter 
- * @BeginCounter: Point in past to be measured from 
- *
- * Return: Returns the diffrence between current counter and counter passed in 
- */
 static int64_t GetDeltaCounter(int64_t BeginCounter) {
     return GetPerfCounter() - BeginCounter;
 }
 
-/**
- * SetWindowState() - Function to change window style, position, and size
- * @Window: Window handle
- * @Style: Window style to be set to
- * @X: New left most coordinate of window
- * @Y: New top most coordiante of window 
- * @Width: New width of window
- * @Height: New height of window
- */
+static float ConvertCounterToSeconds(int64_t DeltaCounter, int64_t PerfFreq) {
+    return (float) DeltaCounter / PerfFreq; 
+} 
+
 static void SetWindowState(
     HWND Window, 
     DWORD Style, 
@@ -223,12 +151,6 @@ static void SetWindowState(
     );
 }
 
-/**
- * FindButtonFromKey() - Finds the "button" for virtual key, if any
- * @VKey: Virtual key 
- *
- * Return: If "button" found returns pointer to button, elsewise NULL
- */
 static uint32_t *FindButtonFromKey(size_t VKey) {
     static const uint8_t s_KeyUsed[COUNTOF_BT] = {
         VK_LEFT,
@@ -245,23 +167,13 @@ static uint32_t *FindButtonFromKey(size_t VKey) {
     return NULL;
 }
 
-/**
- * ToggleFullscreen() - Toggles whether the program is in fullscreen 
- * @Window: Main window handle
- *
- * Return: Reports if change was successful
- */
 static BOOL ToggleFullscreen(HWND Window) {
     static RECT RestoreRect = {0}; 
     static BOOL IsFullscreen = FALSE;
-    static DEVMODE PrevDevMode = {
-        .dmSize = sizeof(PrevDevMode)
-    };
 
     /*RestoreFromFullscreen*/
     if(IsFullscreen) { 
-        LONG DispState = ChangeDisplaySettings(&PrevDevMode, CDS_FULLSCREEN);
-        if(DispState != DISP_CHANGE_SUCCESSFUL) {
+        if(ChangeDisplaySettings(NULL, 0) != DISP_CHANGE_SUCCESSFUL) {
             return FALSE;
         }
         SetWindowState(
@@ -272,14 +184,12 @@ static BOOL ToggleFullscreen(HWND Window) {
             DIB_WIDTH,
             DIB_HEIGHT
         ); 
+        ShowCursor(TRUE);
         IsFullscreen = FALSE;
         return TRUE;
     } 
 
     /*MakeFullscreen*/
-    if(!EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS, &PrevDevMode)) {
-        return FALSE;
-    }
     GetWindowRect(Window, &RestoreRect);
 
     DEVMODE DevMode = {
@@ -289,27 +199,15 @@ static BOOL ToggleFullscreen(HWND Window) {
         .dmPelsHeight = DIB_HEIGHT
     };
     LONG DispState = ChangeDisplaySettings(&DevMode, CDS_FULLSCREEN);
+    if(DispState != DISP_CHANGE_SUCCESSFUL) {
+        return FALSE;
+    }
     SetWindowState(Window, WS_POPUP | WS_VISIBLE, 0, 0, DIB_WIDTH, DIB_HEIGHT); 
-
+    ShowCursor(FALSE);
     IsFullscreen = TRUE;
-    return DispState == DISP_CHANGE_SUCCESSFUL;
+    return TRUE;
 }
 
-/**
- * WndProc() - Handles messages that cannot be processed by ProcessMessages
- * @Window: The main window handle
- * @Message: Message to process 
- * @WParam: Generic integer value that changes meaning depending on message
- * @LParam: Generic integer value that changes meaning depending on message
- *
- * Use the search feature on https://docs.microsoft.com/en-us/windows/win32/ 
- * to find more about specific messages. 
- *
- * Return: Result of function
- *
- * For most messages processed zero should be returned.
- * For messages not processed DefWindowProc should be called.
- */
 static LRESULT WndProc(
     HWND Window, 
     UINT Message, 
@@ -320,6 +218,10 @@ static LRESULT WndProc(
     case WM_DESTROY:
         {
             PostQuitMessage(EXIT_SUCCESS);
+        } return 0;
+    case WM_KILLFOCUS: 
+        { 
+            memset(g_GameState->Buttons, 0, sizeof(g_GameState->Buttons));
         } return 0;
     case WM_PAINT:
         {
@@ -345,18 +247,7 @@ static LRESULT WndProc(
     return DefWindowProc(Window, Message, WParam, LParam);
 }
 
-/**
- * WinMain() - Entry point to windows program 
- * @Instance: A unique handle that identifies the process
- * @PrevInstance: A holdover from Win16, always NULL
- * @CmdLine: Full command line string (ex: .\descent.exe -mute) 
- * @CmdShow: Holds value for default visibility of window, ignored 
- *
- * For more information on @PrevInstance visit:
- * https://devblogs.microsoft.com/oldnewthing/20040615-00/?p=38873
- *
- * Return: Process exit code; either EXIT_FAILURE or EXIT_SUCCESS
- */
+/*LoadPlatform*/
 int WINAPI WinMain(
     HINSTANCE Instance, 
     [[maybe_unused]] HINSTANCE PrevInstance, 
@@ -368,7 +259,7 @@ int WINAPI WinMain(
     const int64_t FinalDeltaCounter = PerfFreq / 60LL;
 
     /*AllocGameState*/
-    g_GameState = VirtualAlloc( 
+    g_GameState = (struct game_state *) VirtualAlloc( 
         NULL, 
         sizeof(*g_GameState), 
         MEM_COMMIT | MEM_RESERVE,
@@ -427,13 +318,15 @@ int WINAPI WinMain(
     } WinmmProcs;
 
     BOOL IsGranular = FALSE;
+    LPCSTR WinmmProcNames[] = {
+        "timeBeginPeriod",
+        "timeEndPeriod"
+    };
+
     HMODULE WinmmLibrary = LoadProcs(
         "winmm.dll",
-        2,
-        (const char *[]) {
-            "timeBeginPeriod",
-            "timeEndPeriod"
-        },
+        _countof(WinmmProcNames),
+        WinmmProcNames,
         WinmmProcs.Procs
     );
     if(WinmmLibrary) {
@@ -453,17 +346,21 @@ int WINAPI WinMain(
         game_update *Update; 
     } GameProcs;
 
+    LPCSTR GameProcNames[] = {
+        "GameUpdate" 
+    }; 
     HMODULE GameLibrary = LoadProcs(
         "descent.dll", 
-        1, 
-        (const char *[]) {
-            "GameUpdate"
-        },
+        _countof(GameProcNames),
+        GameProcNames, 
         &GameProcs.Proc
     );
     if(!GameLibrary) {
         LogError("LoadProcs failed: descent.dll"); 
     }
+
+    /*FirstFrameConsiderations*/
+    g_GameState->FrameDelta = 1.0F / 60.0F; 
 
     /*MainLoop*/
     bool IsRunning = 1;
@@ -490,7 +387,8 @@ int WINAPI WinMain(
                 } break;
             case WM_KEYUP:
                 {
-                    uint32_t *Key = FindButtonFromKey(Message.wParam);
+                    size_t KeyI = Message.wParam;
+                    uint32_t *Key = FindButtonFromKey(KeyI);
                     if(Key) {
                         *Key = 0;
                     }
@@ -509,7 +407,7 @@ int WINAPI WinMain(
 
         /*UpdateGameCode*/
         if(GameLibrary) {
-            GameProcs.Update(g_GameState);
+            GameProcs.Update(g_GameState, &g_Platform);
         }
 
         /*UpdateFrame*/
@@ -525,8 +423,13 @@ int WINAPI WinMain(
                     Sleep(SleepMS);
                 }
             }
-            while(GetDeltaCounter(BeginCounter) < FinalDeltaCounter);
+            do {
+                DeltaCounter = GetDeltaCounter(BeginCounter); 
+            } while(DeltaCounter < FinalDeltaCounter);
         }
+
+        /*UpdateFrameDelta*/
+        g_GameState->FrameDelta = ConvertCounterToSeconds(DeltaCounter, PerfFreq);
     }
 
     /*CleanUp*/
