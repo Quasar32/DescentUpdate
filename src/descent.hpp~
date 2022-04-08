@@ -28,10 +28,6 @@ enum GameButtons {
 
 #define COUNTOF_BT 4
 
-#define TEX_MASK 0x3F
-#define TEX_MASK
-
-
 struct Sprite {
     Vec2 Pos;
     int32_t Texture;

@@ -120,7 +120,7 @@ static bool ReadTexture(const char *Path, uint32_t Texture[TEX_LENGTH][TEX_LENGT
 
 GameState::GameState() {
     for(int32_t X = 0; X < TILE_WIDTH; X++) {
-        TileMap[0][X] = 2;    
+        TileMap[0][X] = 2;
         TileMap[TILE_HEIGHT - 1][X] = 2; 
     }
 

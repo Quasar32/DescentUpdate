@@ -2,7 +2,7 @@ CPPFLAGS = -Wall -g -O3
 OBJFILES = main.o descent.o error.o frame.o worker.o render.o
 
 output: $(OBJFILES) 
-	g++ *.o -mwindows -lwinmm -static-libgcc -static-libstdc++ -o ../build/descent 
+	g++ *.o -mwindows -mconsole -lwinmm -static-libgcc -static-libstdc++ -o ../build/descent 
 
 main.o: main.cpp descent.hpp error.hpp
 	g++ -c main.cpp $(CPPFLAGS)	
