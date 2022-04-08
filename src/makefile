@@ -1,4 +1,4 @@
-CPPFLAGS = -Wall -g -O3
+CPPFLAGS = -Wall -g -O3 -Wno-exception
 OBJFILES = main.o descent.o error.o frame.o worker.o render.o
 
 output: $(OBJFILES) 

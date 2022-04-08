@@ -1,8 +1,8 @@
-CPPFLAGS = -Wall -g -O3
+CPPFLAGS = -Wall -g -O3 -Wno-exceptions -
 OBJFILES = main.o descent.o error.o frame.o worker.o render.o
 
 output: $(OBJFILES) 
-	g++ *.o -mwindows -mconsole -lwinmm -static-libgcc -static-libstdc++ -o ../build/descent 
+	g++ *.o -mwindows -lwinmm -static-libgcc -static-libstdc++ -o ../build/descent 
 
 main.o: main.cpp descent.hpp error.hpp
 	g++ -c main.cpp $(CPPFLAGS)	
