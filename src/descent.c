@@ -75,7 +75,7 @@ static bool ReadTexture(const char *Path, color Texture[TEX_LENGTH][TEX_LENGTH])
 
     bitmap_header BitmapHeader;
     if(!ReadObject(FileHandle, &BitmapHeader, sizeof(BitmapHeader))) {
-        return Ret;
+        goto out;
     }
 
     if( 
@@ -109,7 +109,7 @@ static bool ReadTexture(const char *Path, color Texture[TEX_LENGTH][TEX_LENGTH])
 
     int32_t TextureSize = TEX_LENGTH * TEX_LENGTH * 4;
     if(!ReadObject(FileHandle, Texture, TextureSize)) {
-        return Ret;
+        goto out;
     }
     Ret = 1;
 
