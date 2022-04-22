@@ -1,8 +1,9 @@
 #include <stdio.h>
 #include <windows.h>
-#include "descent.hpp"
-#include "error.hpp"
-#include "frame.hpp"
+#include <stdbool.h>
+#include "descent.h"
+#include "error.h"
+#include "frame.h"
 
 #define MY_WS_FLAGS (WS_VISIBLE | WS_SYSMENU | WS_CAPTION) 
 
@@ -17,7 +18,7 @@ static const BITMAPINFO g_DIBInfo = {
     }
 };
 
-static GameState g_GameState;
+static game_state g_GameState;
 
 static void SetWindowState(
     HWND Window, 
@@ -56,7 +57,7 @@ static uint32_t *FindButtonFromKey(size_t VKey) {
 }
 
 static BOOL ToggleFullscreen(HWND Window) {
-    static RECT RestoreRect = {0}; 
+    static RECT RestoreRect = {}; 
     static BOOL IsFullscreen = FALSE;
 
     /*RestoreFromFullscreen*/
@@ -175,7 +176,7 @@ int WINAPI WinMain(
     [[maybe_unused]] LPSTR CmdLine, 
     [[maybe_unused]] int CmdShow
 ) {
-    Frame FrameTracker(60.0F);
+    frame Frame = CreateFrame(60.0F);
 
     /*InitWindowClass*/
     WNDCLASS WindowClass = {
@@ -215,19 +216,24 @@ int WINAPI WinMain(
         return EXIT_FAILURE;
     }
 
+    /*InitGameState*/
+    CreateGameState(&g_GameState); 
+
     /*MainLoop*/
     while(true) {
-        g_GameState.FrameDelta = FrameTracker.GetFrameDelta();
-        FrameTracker.StartFrame();
+        g_GameState.FrameDelta = GetFrameDelta(&Frame);
+        StartFrame(&Frame);
 
         if(!ProcessMessages(Window)) {
             break;
         } 
-        g_GameState.Update();
+        UpdateGameState(&g_GameState);
         InvalidateRect(Window, NULL, FALSE);
 
-        FrameTracker.EndFrame();
+        EndFrame(&Frame);
     }
+
+    DestroyFrame(&Frame);
 
     return EXIT_SUCCESS;
 }

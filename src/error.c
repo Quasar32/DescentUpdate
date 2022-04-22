@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "error.hpp"
+#include "error.h"
 
 __attribute__((format(printf, 1, 2)))
 BOOL LogError(const char *Format, ...) {

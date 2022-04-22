@@ -1,26 +1,29 @@
-CPPFLAGS = -Wall -g -O3 -Wno-exception
-OBJFILES = main.o descent.o error.o frame.o worker.o render.o
+CPPFLAGS = -Wall -g -O3
+OBJFILES = main.o descent.o error.o frame.o worker.o render.o tile_data.o
 
 output: $(OBJFILES) 
-	g++ *.o -mwindows -lwinmm -static-libgcc -static-libstdc++ -o ../build/descent 
+	gcc *.o -mconsole -mwindows -lwinmm -o ../build/descent 
 
-main.o: main.cpp descent.hpp error.hpp
-	g++ -c main.cpp $(CPPFLAGS)	
+main.o: main.c descent.h error.h
+	gcc -c main.c $(CPPFLAGS)	
 
-descent.o: descent.cpp descent.hpp vec2.hpp worker.hpp render.hpp
-	g++ -c descent.cpp $(CPPFLAGS) 
+descent.o: descent.c descent.h vec2.h worker.h render.h tile_data.c
+	gcc -c descent.c $(CPPFLAGS) 
 
-error.o: error.cpp error.hpp
-	g++ -c error.cpp $(CPPFLAGS) 
+error.o: error.c error.h
+	gcc -c error.c $(CPPFLAGS) 
 
-frame.o: frame.cpp frame.hpp
-	g++ -c frame.cpp $(CPPFLAGS)
+frame.o: frame.c frame.h
+	gcc -c frame.c $(CPPFLAGS)
 
-worker.o: worker.cpp worker.hpp
-	g++ -c worker.cpp $(CPPFLAGS)
+worker.o: worker.c worker.h
+	gcc -c worker.c $(CPPFLAGS)
 
-render.o: render.cpp render.hpp
-	g++ -c render.cpp $(CPPFLAGS)
+render.o: render.c render.h tile_data.h
+	gcc -c render.c $(CPPFLAGS)
+
+tile_data.o: tile_data.h tile_data.c
+	gcc -c tile_data.c $(CPPFLAGS)
 
 clean:
 	del *.o
