@@ -3,6 +3,8 @@
 #include "vec2.h"
 #include "tile_data.h"
 
+#define MAX_TILE_HITS 32 
+
 #define SWAP(A, B) do {\
     __auto_type A_ = (A);\
     __auto_type B_ = (B);\
@@ -11,10 +13,41 @@
     *B_ = Tmp;\
 } while(0)
 
-void FillColor(
-    color Texture[TEX_LENGTH][TEX_LENGTH],
-    color Color
-) {
+typedef struct sprite_render_info {
+    float TransformY;
+    int32_t SpriteScreenX;
+    int32_t SpriteWidth; 
+    int32_t SpriteHeight;
+    float FogEffect;
+
+    int32_t DrawStartX;
+    int32_t DrawEndX;
+    int32_t DrawStartY;
+    int32_t DrawEndY;
+    int32_t VMoveScreen;
+} sprite_render_info;
+
+typedef struct render_decks_data {
+    game_state *GS;
+    int StartY;
+    int EndY;
+} render_decks_data;
+
+typedef struct render_facing_data {
+    game_state *GS;
+    int StartX;
+    int EndX;
+    sprite_render_info *SpriteRenderInfos;
+} render_facing_data;
+
+typedef struct tile_hit {
+    float PerpWallDist;
+    tile_data TileData;
+    bool Side;
+    int32_t SpriteI;
+} tile_hit; 
+
+void FillColor(color Texture[static TEX_LENGTH][TEX_LENGTH], color Color) {
     for(int Y = 0; Y < TEX_LENGTH; Y++) {
         for(int X = 0; X < TEX_LENGTH; X++) {
             Texture[Y][X] = Color;
@@ -26,11 +59,74 @@ static float CalcFogEffect(float Dis) {
     return Dis < 5.0F ? 1.0F - Dis / 5.0F : 0.0F;
 }
 
-typedef struct render_decks_data {
-    game_state *GS;
-    int StartY;
-    int EndY;
-} render_decks_data;
+static void SortSprites(game_state *GS) {
+    float SpriteSquareDis[SPR_CAP];
+    for(uint32_t I = 0; I < GS->SpriteCount; I++) {
+        SpriteSquareDis[I] = SquareDisVec2(GS->Pos, GS->Sprites[I].Pos);
+        for(int32_t J = I; J > 0; J--) {
+            if(SpriteSquareDis[J] < SpriteSquareDis[J - 1]) {
+                break;
+            }
+            SWAP(&GS->Sprites[J], &GS->Sprites[J - 1]); 
+            SWAP(&SpriteSquareDis[J], &SpriteSquareDis[J - 1]); 
+        }
+    }
+} 
+
+static void ComputeRenderSpriteInfos(
+    game_state *GS, 
+    sprite_render_info SpriteRenderInfos[SPR_CAP]
+) {
+    int32_t BobCycle = (int32_t) (GS->TotalTime * 16) % 16;
+    int32_t Bob = BobCycle < 8 ? BobCycle : 16 - BobCycle; 
+
+    for(uint32_t I = 0; I < GS->SpriteCount; I++) {
+        vec2 SpriteDis = SubVec2(GS->Sprites[I].Pos, GS->Pos);
+        float InvDet = 1.0F / DetVec2(GS->Plane, GS->Dir);
+        float TransformX = InvDet * DetVec2(SpriteDis, GS->Dir);
+        float TransformY = InvDet * DetVec2(GS->Plane, SpriteDis);
+
+        int32_t SpriteScreenX = (int) (
+            (float) DIB_WIDTH / 2.0F * 
+            (1.0F + TransformX / TransformY)
+        );
+
+        int32_t UDiv = 1;
+        int32_t VDiv = 1;
+        float VMove = Bob;
+        int32_t VMoveScreen = (int) (VMove / TransformY);
+
+        /*UseFogEffect*/
+        float PerpDist = TransformY;
+        if(PerpDist > 5.0F) {
+            continue;
+        }
+        float FogEffect = CalcFogEffect(TransformY);
+
+        /*CalcYCompVars*/
+        int32_t SpriteHeight = ABS((int32_t) (DIB_HEIGHT / TransformY)) / VDiv;
+        int32_t DrawStartY = MAX(0, (DIB_HEIGHT - SpriteHeight) / 2 + VMoveScreen); 
+        int32_t DrawEndY = MIN(DIB_HEIGHT - 1, (SpriteHeight + DIB_HEIGHT) / 2 + VMoveScreen); 
+                    
+        /*CalcXCompXVars*/
+        int32_t SpriteWidth = ABS((int32_t) (DIB_HEIGHT / TransformY)) / UDiv;
+        int32_t DrawStartX = MAX(0, SpriteScreenX - SpriteWidth / 2);
+        int32_t DrawEndX = MIN(DIB_WIDTH, SpriteWidth / 2 + SpriteScreenX);
+
+        SpriteRenderInfos[I] = (sprite_render_info) { 
+            .TransformY = TransformY,
+            .SpriteScreenX = SpriteScreenX,
+            .SpriteWidth = SpriteWidth, 
+            .SpriteHeight = SpriteHeight,
+            .FogEffect = FogEffect,
+            .DrawStartX = DrawStartX,
+            .DrawEndX = DrawEndX,
+            .DrawStartY = DrawStartY,
+            .DrawEndY = DrawEndY,
+            .VMoveScreen = VMoveScreen
+        };
+    }
+}
 
 static void RenderDecksTask(void *TaskData) {
     render_decks_data *P = TaskData; 
@@ -65,14 +161,33 @@ static void RenderDecksTask(void *TaskData) {
     }
 }
 
-typedef struct render_wall_data {
-    game_state *GS;
-    int StartX;
-    int EndX;
-} render_wall_data;
+static void RenderSprite(render_facing_data *P, int X, const tile_hit *TileHit) {
+    sprite_render_info *RenderInfo = &P->SpriteRenderInfos[TileHit->SpriteI];
 
-static void RenderWallTask(void *TaskData) {
-    render_wall_data *P = TaskData; 
+    int TexX = (
+        256 * 
+        (X + RenderInfo->SpriteWidth / 2 - RenderInfo->SpriteScreenX) * 
+        TEX_LENGTH / 
+        (RenderInfo->SpriteWidth * 256) 
+    ); 
+
+    for(int Y = RenderInfo->DrawStartY; Y < RenderInfo->DrawEndY; Y++) {
+        int D = (
+            (Y - RenderInfo->VMoveScreen) * 256 + 
+            (RenderInfo->SpriteHeight - DIB_HEIGHT) * 128 
+        );
+        int32_t TexY = D * TEX_LENGTH / RenderInfo->SpriteHeight / 256; 
+        tile Texture = GetTileData(P->GS->Sprites[TileHit->SpriteI].Tile).TexI;
+        color Color = P->GS->TexData[Texture][TexY][TexX];
+
+        if(IsOpaque(Color)) {
+            P->GS->Pixels[Y][X] = MulColor(Color, RenderInfo->FogEffect);
+        }
+    }
+}
+
+static void RenderFacingTask(void *TaskData) {
+    render_facing_data *P = TaskData; 
     for(int32_t X = P->StartX; X < P->EndX; X++) {
         float CameraX = (float) (X << 1) / (float) DIB_WIDTH - 1;
 
@@ -105,116 +220,120 @@ static void RenderWallTask(void *TaskData) {
         }
 
         /*LocateTileHit*/
-        typedef struct tile_hit {
-            float SideDistX;
-            float SideDistY;
-            int32_t TileI;
-            int32_t TileX;
-            int32_t TileY;
-            bool Side;
-            tile_data TileData;
-        } tile_hit; 
-
-        tile_hit TileHits[32];
+        tile_hit TileHits[MAX_TILE_HITS];
         int32_t TileHitCount = 0;
 
         TileHits[TileHitCount++] = (tile_hit) {
-            .SideDistX = SideDistX,
-            .SideDistY = SideDistY,
-            .TileX = TileX,
-            .TileY = TileY,
+            .SpriteI = -1
         };
         if(IsInTileMap(TileY, TileX)) {
-            TileHits[0].TileI = P->GS->TileMap[TileHits[0].TileY][TileHits[0].TileX];
-            while(TileHitCount < _countof(TileHits)) {
-                tile_hit *TileHitPrev = &TileHits[TileHitCount - 1];
+            TileHits[0].TileData = GetTileData(P->GS->TileMap[TileY][TileX]);
+            while(TileHitCount < MAX_TILE_HITS) {
                 tile_hit *TileHitCur = &TileHits[TileHitCount];
-                *TileHitCur = *TileHitPrev;
-                if(TileHitPrev->SideDistX < TileHitPrev->SideDistY) {
-                    TileHitCur->SideDistX += DeltaDistX;
-                    TileHitCur->TileX += StepX;
+                if(SideDistX < SideDistY) {
+                    SideDistX += DeltaDistX;
+                    TileX += StepX;
                     TileHitCur->Side = false;
+                    TileHitCur->PerpWallDist = SideDistX - DeltaDistX;
                 } else {
-                    TileHitCur->SideDistY += DeltaDistY;
-                    TileHitCur->TileY += StepY;
+                    SideDistY += DeltaDistY;
+                    TileY += StepY;
+                    TileHitCur->PerpWallDist = SideDistY - DeltaDistY;
                     TileHitCur->Side = true;
                 }
-                if(!IsInTileMap(TileHitCur->TileY, TileHitCur->TileX)) {
+                TileHitCur->SpriteI = -1;
+                if(!IsInTileMap(TileY, TileX)) {
                     break;
                 }
-                TileHitCur->TileI = P->GS->TileMap[TileHitCur->TileY][TileHitCur->TileX];
+                TileHitCur->TileData = GetTileData(P->GS->TileMap[TileY][TileX]);
                 TileHitCount++;
 
-                TileHitCur->TileData = GetTileData(TileHitCur->TileI);
                 if(!(TileHitCur->TileData.Flags & TF_ALPHA)) {
                     break;
                 }
             }
         }
 
+        for(uint32_t I = 0; I < P->GS->SpriteCount && TileHitCount < MAX_TILE_HITS; I++) { 
+            if(
+                P->SpriteRenderInfos[I].TransformY <= 0.0F || 
+                P->SpriteRenderInfos[I].DrawStartX > X ||
+                P->SpriteRenderInfos[I].DrawEndX <= X
+            ) {
+                continue;
+            }
+
+            tile_hit NewTileHit = {
+                .PerpWallDist = P->SpriteRenderInfos[I].TransformY,
+                .TileData = GetTileData(P->GS->Sprites[I].Tile), 
+                .SpriteI = I,
+            };
+
+            /*InsertTileHit*/
+            for(int32_t J = 0; J < TileHitCount; J++) {
+                if(NewTileHit.PerpWallDist < TileHits[J].PerpWallDist) {
+                    memmove(&TileHits[J + 1], &TileHits[J], (TileHitCount - J) * sizeof(*TileHits));
+                    TileHits[J] = NewTileHit; 
+                    TileHitCount++;
+                    break;
+                }
+            } 
+        } 
+
         int32_t TileI = TileHitCount; 
         bool LayeredColor = false;
         while(TileI-- > 0) {
             tile_hit *TileHitCur = &TileHits[TileI];
-            if(TileHitCur->TileI == 0 && TileI != TileHitCount - 1) {
-                continue;
-            }
 
-            /*FindWall*/
-            float PerpWallDist = (
-                TileHitCur->Side ? 
-                    TileHitCur->SideDistY - DeltaDistY :
-                    TileHitCur->SideDistX - DeltaDistX  
-            );
-            float FogEffect = CalcFogEffect(PerpWallDist);
-            float WallX = (
-                TileHitCur->Side ?
-                    P->GS->Pos.X + PerpWallDist * RayDirX :
-                    P->GS->Pos.Y + PerpWallDist * RayDirY 
-            );
-            WallX -= floorf(WallX);
-
-            /*FindTexture*/
-            int32_t TexX = (int) (WallX * (float) TEX_LENGTH); 
-            if(TileHitCur->Side ? RayDirY < 0.0 : RayDirX > 0.0) {
-                TexX = TEX_LENGTH - TexX - 1; 
-            }
-
-            /*RenderLine*/
-            int32_t LineHeight = (int32_t) (DIB_HEIGHT / PerpWallDist);
-            int32_t HalfHeight = LineHeight / 2;
-
-            int32_t DrawCenter = DIB_HEIGHT / 2;
-            int32_t DrawStart = MAX(0, DrawCenter - HalfHeight);
-            int32_t DrawEnd = MIN(DIB_HEIGHT - 1, DrawCenter + HalfHeight);
-
-            float Step = (float) TEX_LENGTH / (DIB_HEIGHT / PerpWallDist);
-            float TexPos = (float) (DrawStart - DrawCenter + HalfHeight) * Step; 
-
-            if(
-                (!(TileHitCur->TileData.Flags & TF_VERT) && TileHitCur->Side) ||
-                (!(TileHitCur->TileData.Flags & TF_HORZ) && !TileHitCur->Side)
+            if(TileHitCur->SpriteI >= 0) {
+                RenderSprite(P, X, TileHitCur);
+            } else if(
+                (TileHitCur->TileData.TexI != 0 || TileI == TileHitCount - 1) &&
+                (TileHitCur->TileData.Flags & TF_VERT || !TileHitCur->Side) &&
+                (TileHitCur->TileData.Flags & TF_HORZ || TileHitCur->Side)
             ) {
-                continue;
-            }
-        
+                /*FindWall*/
+                float FogEffect = CalcFogEffect(TileHitCur->PerpWallDist);
+                float WallX = (
+                    TileHitCur->Side ?
+                        P->GS->Pos.X + TileHitCur->PerpWallDist * RayDirX :
+                        P->GS->Pos.Y + TileHitCur->PerpWallDist * RayDirY 
+                );
+                WallX -= floorf(WallX);
 
-            for(int32_t Y = DrawStart; Y < DrawEnd; Y++) {
-                int32_t TexY = (int32_t) TexPos & (TEX_LENGTH - 1);
-                TexPos += Step;
-                color TexColor = P->GS->TexData[TileHitCur->TileData.TexI][TexY][TexX]; 
-                color OutColor = MulColor(TexColor, FogEffect);
-                if(TileHitCur->TileData.Flags | TF_ALPHA) {
-                    color ToLayerColor = LayeredColor ? P->GS->Pixels[Y][X] : OpaqueColor(0, 0, 0);
-                    OutColor = LayerColor(ToLayerColor, OutColor); 
+                /*FindTexture*/
+                int32_t TexX = (int) (WallX * (float) TEX_LENGTH); 
+                if(TileHitCur->Side ? RayDirY < 0.0 : RayDirX > 0.0) {
+                    TexX = TEX_LENGTH - TexX - 1; 
                 }
-                if(TileHitCur->Side) {
-                    OutColor = HalfColor(OutColor);
+
+                /*RenderLine*/
+                int32_t LineHeight = (int32_t) (DIB_HEIGHT / TileHitCur->PerpWallDist);
+                int32_t HalfHeight = LineHeight / 2;
+
+                int32_t DrawCenter = DIB_HEIGHT / 2;
+                int32_t DrawStart = MAX(0, DrawCenter - HalfHeight);
+                int32_t DrawEnd = MIN(DIB_HEIGHT - 1, DrawCenter + HalfHeight);
+
+                float Step = (float) TEX_LENGTH / (DIB_HEIGHT / TileHitCur->PerpWallDist);
+                float TexPos = (float) (DrawStart - DrawCenter + HalfHeight) * Step; 
+
+                for(int32_t Y = DrawStart; Y < DrawEnd; Y++) {
+                    int32_t TexY = (int32_t) TexPos & (TEX_LENGTH - 1);
+                    TexPos += Step;
+                    color TexColor = P->GS->TexData[TileHitCur->TileData.TexI][TexY][TexX]; 
+                    color OutColor = MulColor(TexColor, FogEffect);
+                    if(TileHitCur->TileData.Flags | TF_ALPHA) {
+                        color ToLayerColor = LayeredColor ? P->GS->Pixels[Y][X] : OpaqueColor(0, 0, 0);
+                        OutColor = LayerColor(ToLayerColor, OutColor); 
+                    }
+                    if(TileHitCur->Side) {
+                        OutColor = HalfColor(OutColor);
+                    }
+                    P->GS->Pixels[Y][X] = OutColor;
                 }
-                P->GS->Pixels[Y][X] = OutColor;
             }
             LayeredColor = true;
-            P->GS->ZBuffer[X] = PerpWallDist;
         }
     }
 }
@@ -235,108 +354,30 @@ static void RenderDecks(game_state *GS) {
     WorkerMultiWait(_countof(GS->Workers), GS->Workers); 
 }
 
-static void RenderWalls(game_state *GS) {
-    render_wall_data TaskData[_countof(GS->Workers)];
+static void RenderFacing(game_state *GS, sprite_render_info SpriteRenderInfos[static SPR_CAP]) {
+    render_facing_data TaskData[_countof(GS->Workers)];
 
     for(size_t I = 0; I < _countof(TaskData); I++) {
-        TaskData[I] = (render_wall_data) {
+        TaskData[I] = (render_facing_data) {
             .GS = GS,
             .StartX = I * DIB_WIDTH / _countof(TaskData), 
-            .EndX = (I + 1) * DIB_WIDTH / _countof(TaskData)
+            .EndX = (I + 1) * DIB_WIDTH / _countof(TaskData),
+            .SpriteRenderInfos = SpriteRenderInfos
         };
 
         GS->Workers[I].Data = &TaskData[I]; 
-        GS->Workers[I].Task = RenderWallTask;
+        GS->Workers[I].Task = RenderFacingTask;
     }
     WorkerMultiWait(_countof(GS->Workers), GS->Workers); 
 }
 
-static void SortSprites(game_state *GS) {
-    for(uint32_t I = 0; I < GS->SpriteCount; I++) {
-        GS->SpriteSquareDis[I] = SquareDisVec2(GS->Pos, GS->Sprites[I].Pos);
-        for(int32_t J = I; J > 0; J--) {
-            if(GS->SpriteSquareDis[J] < GS->SpriteSquareDis[J - 1]) {
-                break;
-            }
-            SWAP(&GS->Sprites[J], &GS->Sprites[J - 1]); 
-            SWAP(&GS->SpriteSquareDis[J], &GS->SpriteSquareDis[J - 1]); 
-        }
-    }
-} 
-
-static void RenderSprites(game_state *GS) {
-    int32_t BobCycle = (int32_t) (GS->TotalTime * 16) % 16;
-    int32_t Bob = BobCycle < 8 ? BobCycle : 16 - BobCycle; 
-
-    for(uint32_t I = 0; I < GS->SpriteCount; I++) {
-        vec2 SpriteDis = SubVec2(GS->Sprites[I].Pos, GS->Pos);
-        float InvDet = 1.0F / DetVec2(GS->Plane, GS->Dir);
-        float TransformX = InvDet * DetVec2(SpriteDis, GS->Dir);
-        float TransformY = InvDet * DetVec2(GS->Plane, SpriteDis);
-
-        int32_t SpriteScreenX = (int) (
-            (float) DIB_WIDTH / 2.0F * 
-            (1.0F + TransformX / TransformY)
-        );
-
-        int32_t UDiv = 1;
-        int32_t VDiv = 1;
-        float VMove = Bob;
-        int32_t VMoveScreen = (int) (VMove / TransformY);
-
-        /*UseFogEffect*/
-        float PerpDist = GS->SpriteSquareDis[I];
-        if(PerpDist > 25.0F) {
-            continue;
-        }
-        float FogEffect = CalcFogEffect(PerpDist);
-
-        /*CalcYCompVars*/
-        int32_t SpriteHeight = ABS((int32_t) (DIB_HEIGHT / TransformY)) / VDiv;
-        int32_t DrawStartY = MAX(
-            0, 
-            (DIB_HEIGHT - SpriteHeight) / 2 + VMoveScreen 
-        ); 
-        int32_t DrawEndY = MIN(
-            DIB_HEIGHT - 1, 
-            (SpriteHeight + DIB_HEIGHT) / 2 + VMoveScreen 
-        ); 
-                    
-        /*CalcXCompXVars*/
-        int32_t SpriteWidth = ABS((int32_t) (DIB_HEIGHT / TransformY)) / UDiv;
-        int32_t DrawStartX = MAX(0, SpriteScreenX - SpriteWidth / 2);
-        int32_t DrawEndX = MIN(DIB_WIDTH, SpriteWidth / 2 + SpriteScreenX);
-
-        for(int32_t X = DrawStartX; X < DrawEndX; X++) {
-            int TexX = (
-                256 * 
-                (X + SpriteWidth / 2 - SpriteScreenX) * 
-                TEX_LENGTH / 
-                (SpriteWidth * 256) 
-            ); 
-
-            if(TransformY > 0.0F && TransformY < GS->ZBuffer[X]) {
-                for(int Y = DrawStartY; Y < DrawEndY; Y++) {
-                    int D = (
-                        (Y - VMoveScreen) * 256 + 
-                        (SpriteHeight - DIB_HEIGHT) * 128 
-                    );
-                    int32_t TexY = D * TEX_LENGTH / SpriteHeight / 256; 
-                    color Color = GS->TexData[GS->Sprites[I].Texture][TexY][TexX];
-
-                    if(IsOpaque(Color)) {
-                        GS->Pixels[Y][X] = MulColor(Color, FogEffect);
-                    }
-                }
-            }
-        }
-    }
-}
-
 void RenderWorld(game_state *GS) {
-    RenderDecks(GS);
-    RenderWalls(GS);
     SortSprites(GS);
-    RenderSprites(GS);
+
+    sprite_render_info SpriteRenderInfos[SPR_CAP];
+    ComputeRenderSpriteInfos(GS, SpriteRenderInfos);
+
+    RenderDecks(GS);
+    RenderFacing(GS, SpriteRenderInfos);
 }
 

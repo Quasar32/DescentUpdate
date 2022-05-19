@@ -8,6 +8,10 @@ static tile_data TileData[] = {
         .TexI = 2,
         .Flags = TF_HORZ | TF_VERT | TF_SOLID
     },
+    [TD_GHOST] = {
+        .TexI = 3,
+        .Flags = TF_SPRITE
+    },
     [TD_GLASS_HORZ] = {
         .TexI = 4,
         .Flags = TF_HORZ | TF_SOLID | TF_ALPHA

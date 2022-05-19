@@ -1,9 +1,20 @@
 #include <stdio.h>
 #include <windows.h>
 #include <stdbool.h>
+#include <xinput.h>
+
+#include "audio.h"
 #include "descent.h"
 #include "error.h"
 #include "frame.h"
+#include "procs.h"
+
+typedef DWORD WINAPI xinput_get_state(DWORD, XINPUT_STATE *);
+
+typedef struct xinput {
+    HMODULE Lib;
+    xinput_get_state *GetState;
+} xinput; 
 
 #define MY_WS_FLAGS (WS_VISIBLE | WS_SYSMENU | WS_CAPTION) 
 
@@ -40,7 +51,87 @@ static void SetWindowState(
     );
 }
 
-static uint32_t *FindButtonFromKey(size_t VKey) {
+typedef DWORD WINAPI xinput_get_state(DWORD, XINPUT_STATE *);
+
+static DWORD XInputGetStateStub(
+    [[maybe_unused]] DWORD UserIndex, 
+    [[maybe_unused]] XINPUT_STATE *State
+) {
+    return ERROR_DEVICE_NOT_CONNECTED; 
+}
+
+static xinput LoadXInput(void) {
+    xinput XInput;
+    FARPROC Proc;
+    XInput.Lib = LoadProcsVersioned(
+        3,
+        (const char *[]) {
+            "xinput1_4.dll",
+            "xinput1_3.dll",
+            "xinput9_1_0.dll"
+        },
+        1,
+        (const char *[]) {
+            "XInputGetState" 
+        },
+        &Proc
+    );
+    XInput.GetState = XInput.Lib ? (xinput_get_state *) Proc : XInputGetStateStub;
+    return XInput;
+}
+
+static int CappedInc(int Val) {
+    return Val < INT32_MAX ? Val + 1: Val;
+}
+
+static bool UpdateButton(int I, bool IsDown) {
+    if(I < 0 || I >= COUNTOF_BT) {
+        return false;
+    }
+
+    g_GameState.Buttons[I] = ( 
+        IsDown ? 
+            CappedInc(g_GameState.Buttons[I]) : 
+            0
+    );
+    return true;
+}
+
+static bool XInputToButton(const xinput *XInput) {
+    XINPUT_STATE State;
+    if(XInput->GetState(0, &State) != ERROR_SUCCESS) {
+        return false;
+    } 
+
+    if(State.Gamepad.sThumbLX < -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) {
+        State.Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_LEFT; 
+    }
+    if(State.Gamepad.sThumbLX > XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) {
+        State.Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_RIGHT; 
+    }
+
+    if(State.Gamepad.sThumbLY < -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) {
+        State.Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_DOWN; 
+    }
+    if(State.Gamepad.sThumbLY > XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) {
+        State.Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_UP; 
+    }
+
+    static const WORD s_ButtonUsed[COUNTOF_BT] = {
+        XINPUT_GAMEPAD_DPAD_LEFT,
+        XINPUT_GAMEPAD_DPAD_UP,
+        XINPUT_GAMEPAD_DPAD_RIGHT,
+        XINPUT_GAMEPAD_DPAD_DOWN
+    }; 
+
+    for(int I = 0; I < COUNTOF_BT; I++) {
+        UpdateButton(I, State.Gamepad.wButtons & s_ButtonUsed[I]);
+    }
+
+    return true;
+}
+
+static int FindButtonFromKey(size_t VKey) {
     static const uint8_t s_KeyUsed[COUNTOF_BT] = {
         VK_LEFT,
         VK_UP,
@@ -50,10 +141,10 @@ static uint32_t *FindButtonFromKey(size_t VKey) {
 
     for(int I = 0; I < COUNTOF_BT; I++) {
         if(VKey == s_KeyUsed[I]) {
-            return &g_GameState.Buttons[I];
+            return I;
         } 
     }
-    return NULL;
+    return -1;
 }
 
 static BOOL ToggleFullscreen(HWND Window) {
@@ -97,7 +188,7 @@ static BOOL ToggleFullscreen(HWND Window) {
     return TRUE;
 }
 
-static bool ProcessMessages(HWND Window) {
+static bool ProcessMessages(HWND Window, xaudio2 *XAudio2) {
     MSG Message;
     while(PeekMessage(&Message, NULL, 0U, 0U, PM_REMOVE)) {
         switch(Message.message) {
@@ -108,21 +199,20 @@ static bool ProcessMessages(HWND Window) {
                     if(!ToggleFullscreen(Window)) {
                         MessageError("ToggleFullscreen failed"); 
                     }
+                } else if(KeyI == 'X') {
+                    atomic_store(&XAudio2->IsPlaying, false);
                 } else {
-                    uint32_t *Key = FindButtonFromKey(Message.wParam);
-                    if(Key && *Key < INT32_MAX) {
-                        (*Key)++;
-                    }
+                    UpdateButton(FindButtonFromKey(KeyI), true);
                 }
             } return true;
         case WM_KEYUP:
             {
                 size_t KeyI = Message.wParam;
-                uint32_t *Key = FindButtonFromKey(KeyI);
-                if(Key) {
-                    *Key = 0;
-                }
+                UpdateButton(FindButtonFromKey(KeyI), false);
             } return true;
+        case WM_SYSKEYDOWN:
+            memset(g_GameState.Buttons, 0, sizeof(g_GameState.Buttons));
+            break; /*continue processing*/
         case WM_QUIT:
             return false;
         }
@@ -176,7 +266,13 @@ int WINAPI WinMain(
     [[maybe_unused]] LPSTR CmdLine, 
     [[maybe_unused]] int CmdShow
 ) {
-    frame Frame = CreateFrame(60.0F);
+    /*InitAudio*/
+    com Com;
+    xaudio2 XAudio2;
+    if(CreateCom(&Com)) {
+        CreateXAudio2(&XAudio2);
+    }
+    PlayOgg(&XAudio2, "../music/z3r0-8bitSyndrome.ogg");
 
     /*InitWindowClass*/
     WNDCLASS WindowClass = {
@@ -216,7 +312,9 @@ int WINAPI WinMain(
         return EXIT_FAILURE;
     }
 
-    /*InitGameState*/
+    /*InitMisc*/
+    frame Frame = CreateFrame(60.0F);
+    xinput XInput = LoadXInput();
     CreateGameState(&g_GameState); 
 
     /*MainLoop*/
@@ -224,9 +322,12 @@ int WINAPI WinMain(
         g_GameState.FrameDelta = GetFrameDelta(&Frame);
         StartFrame(&Frame);
 
-        if(!ProcessMessages(Window)) {
+        if(!ProcessMessages(Window, &XAudio2)) {
             break;
         } 
+
+        XInputToButton(&XInput);
+
         UpdateGameState(&g_GameState);
         InvalidateRect(Window, NULL, FALSE);
 
@@ -234,6 +335,8 @@ int WINAPI WinMain(
     }
 
     DestroyFrame(&Frame);
+    DestroyXAudio2(&XAudio2); 
+    DestroyCom(&Com);
 
     return EXIT_SUCCESS;
 }

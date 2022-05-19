@@ -1,0 +1,36 @@
+CPPFLAGS = -Wall -g -O3
+OBJFILES = main.o descent.o error.o frame.o worker.o render.o tile_data.o procs.o
+LINKFLAGS = -mconsole -mwindows
+
+output: $(OBJFILES) 
+	gcc *.o -o ../build/descent $(LINKFLAGS)
+
+main.o: main.c descent.h error.h
+	gcc -c main.c $(CPPFLAGS)
+
+descent.o: descent.c descent.h vec2.h worker.h render.h tile_data.c
+	gcc -c descent.c $(CPPFLAGS) 
+
+error.o: error.c error.h
+	gcc -c error.c $(CPPFLAGS) 
+
+frame.o: frame.c frame.h procs.h
+	gcc -c frame.c $(CPPFLAGS)
+
+worker.o: worker.c worker.h
+	gcc -c worker.c $(CPPFLAGS)
+
+render.o: render.c render.h tile_data.h descent.h scalar.h
+	gcc -c render.c $(CPPFLAGS)
+
+tile_data.o: tile_data.c tile_data.h
+	gcc -c tile_data.c $(CPPFLAGS)
+
+procs.o: procs.c procs.h
+	gcc -c procs.c $(CPPFLAGS)
+
+stb_vorbis.o: stb_vorbis.c stb_vorbis.h
+	gcc -c stb_vorbis.c $(CPPFLAGS)
+
+clean:
+	del *.o

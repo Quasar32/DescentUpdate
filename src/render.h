@@ -9,6 +9,7 @@
 void RenderWorld(game_state *GS);
 void FillColor(color Texture[TEX_LENGTH][TEX_LENGTH], color Color);
 
+[[maybe_unused]]
 static inline bool IsInTileMap(size_t Row, size_t Col) {
     return Row < TILE_HEIGHT && Col < TILE_WIDTH;
 }

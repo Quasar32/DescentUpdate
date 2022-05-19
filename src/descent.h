@@ -3,12 +3,14 @@
 
 #include <stdint.h>
 #include <windows.h>
+
 #include "color.h"
+#include "tile_data.h"
 #include "vec2.h"
 #include "worker.h"
 
 #define DIB_WIDTH 640 
-#define DIB_HEIGHT 480
+#define DIB_HEIGHT 480 
 
 #define TEX_LENGTH 16 
 
@@ -31,7 +33,7 @@ typedef enum game_buttons {
 
 typedef struct sprite {
     vec2 Pos;
-    int32_t Texture;
+    tile Tile;
 } sprite;
 
 typedef struct game_state {
@@ -43,9 +45,6 @@ typedef struct game_state {
     /*Sprite*/
     uint32_t SpriteCount;
     sprite Sprites[SPR_CAP];
-
-    float ZBuffer[DIB_WIDTH];
-    float SpriteSquareDis[SPR_CAP];
 
     /*Camera*/
     vec2 Pos; 
